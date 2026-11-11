@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+  }
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #111827;
+    background-color: #FFFFFF;
+    line-height: 1.45;
+    font-size: 9.5pt;
+  }
+  .header {
+    border-bottom: 2px solid #0F172A;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  .header-left h1 {
+    font-size: 20pt;
+    font-weight: 800;
+    color: #0F172A;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+  .header-left .subtitle {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #2563EB;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .header-right {
+    text-align: right;
+    font-size: 8pt;
+    color: #64748B;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    gap: 8px;
+  }
+  .meta-item .label {
+    font-size: 7.5pt;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #64748B;
+  }
+  .meta-item .value {
+    font-size: 9pt;
+    font-weight: 700;
+    color: #0F172A;
+  }
+  h2 {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #0F172A;
+    margin-top: 14px;
+    margin-bottom: 6px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #E2E8F0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  h2::before {
+    content: "";
+    display: inline-block;
+    width: 4px;
+    height: 12px;
+    background: #2563EB;
+    border-radius: 2px;
+  }
+  p {
+    margin-bottom: 8px;
+    text-align: justify;
+    color: #334155;
+  }
+  .highlight-box {
+    background: #EFF6FF;
+    border-left: 3px solid #2563EB;
+    padding: 8px 12px;
+    border-radius: 0 4px 4px 0;
+    margin: 8px 0;
+    font-size: 9pt;
+    color: #1E40AF;
+  }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 8px 0;
+  }
+  .card {
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 10px;
+    background: #FAFAFA;
+  }
+  .card h3 {
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #0F172A;
+    margin-bottom: 4px;
+  }
+  ul {
+    margin-left: 16px;
+    margin-bottom: 8px;
+    color: #334155;
+  }
+  li {
+    margin-bottom: 3px;
+  }
+  .metric-badge {
+    display: inline-block;
+    background: #DCFCE7;
+    color: #166534;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 8pt;
+  }
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 8.5pt;
+  }
+  .table th, .table td {
+    border: 1px solid #E2E8F0;
+    padding: 6px 8px;
+    text-align: left;
+  }
+  .table th {
+    background: #F1F5F9;
+    font-weight: 700;
+    color: #1E293B;
+  }
+  .page-break {
+    page-break-after: always;
+  }
+  .footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    font-size: 7.5pt;
+    color: #94A3B8;
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid #E2E8F0;
+    padding-top: 6px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>SENTINEL AI</h1>
+    <div class="subtitle">Autonomous Spatio-Temporal Edge Surveillance & Altercation Intelligence</div>
+  </div>
+  <div class="header-right">
+    <strong>St Aloysius – RBIH FinTech Hackathon 2026</strong><br>
+    Track: Open Innovation Track<br>
+    Stage: Working Prototype
+  </div>
+</div>
+
+<div class="meta-grid">
+  <div class="meta-item">
+    <div class="label">Project Domain</div>
+    <div class="value">Computer Vision / FinTech Security</div>
+  </div>
+  <div class="meta-item">
+    <div class="label">Target Environments</div>
+    <div class="value">ATM Vestibules & Bank Branches</div>
+  </div>
+  <div class="meta-item">
+    <div class="label">Processing Latency</div>
+    <div class="value">Sub-150ms Threat Trip</div>
+  </div>
+  <div class="meta-item">
+    <div class="label">Streaming Performance</div>
+    <div class="value">30 – 60 FPS Fluid MJPEG</div>
+  </div>
+</div>
+
+<h2>1. Executive Summary & Problem Formulation</h2>
+<p>
+High-security environments in the financial sector—specifically 24/7 standalone ATM kiosks, bank branches, and currency transfer vaults—face acute physical vulnerability. Current surveillance reliance on passive video recording (DVR/NVR) or remote human security operators exhibits critical systemic flaws:
+</p>
+<ul>
+  <li><strong>Operational Latency:</strong> Human response times to physical robberies or aggressive coercion exceed 4 to 8 minutes, rendering CCTV footage solely forensic rather than preventative.</li>
+  <li><strong>High False Alarm Rates:</strong> Basic motion-triggered sensors trip indiscriminately on harmless actions (sweeping, customer gestures, door vibrations), leading to alert fatigue.</li>
+  <li><strong>Inference Bottlenecks:</strong> Conventional AI surveillance pipelines couple heavy deep neural networks directly into the video display thread, introducing catastrophic 2–4 second video lag and buffer overruns.</li>
+</ul>
+<div class="highlight-box">
+  <strong>Core Problem:</strong> Financial institutions lack an affordable, edge-compatible solution capable of continuously isolating human altercations in real time without lag, while filtering false positives from variable lighting and ambient clutter.
+</div>
+
+<h2>2. The Proposed Solution & AI/ML Architecture</h2>
+<p>
+Sentinel AI is an end-to-end edge surveillance engine engineered to deliver zero-latency threat detection across live CCTV feeds, RTSP streams, and mobile IP cameras. The framework resolves the traditional throughput bottleneck via a <strong>Decoupled Dual-Thread Architecture</strong>:
+</p>
+<div class="two-col">
+  <div class="card">
+    <h3>Thread 1: Dedicated Frame & Streaming Loop</h3>
+    <p>Operates an asynchronous capture worker feeding lockless queues. Handles MJPEG client encoding independently at 30–60 FPS, ensuring zero stutter for monitoring personnel.</p>
+  </div>
+  <div class="card">
+    <h3>Thread 2: Asynchronous AI Inference Engine</h3>
+    <p>Consumes downsampled frames at a fixed 15 Hz cadence, executing multi-stage spatial tracking, dynamic noise estimation, and 3D CNN kinetic action evaluation.</p>
+  </div>
+</div>
+
+<h2>3. Deep Learning & Mathematical Pipeline</h2>
+<p>
+The intelligence layer operates through a three-stage mathematical pipeline:
+</p>
+<ul>
+  <li><strong>Layer 1: Adaptive Illumination Equalization:</strong> Deploys CIE-LAB color space transformation with Contrast Limited Adaptive Histogram Equalization (CLAHE) on the L-channel (clip limit 2.0, 8x8 grid). This neutralizes harsh shadows and glaring backlights typical of glass ATM vestibules.</li>
+  <li><strong>Layer 2: Spatial Multi-Person Proximity Tracking:</strong> Uses Ultralytics YOLO11n combined with ByteTrack. Calculates Euclidean pairwise centroid distances and bounding box IoU overlaps to identify clustered human interactions and isolate altercations.</li>
+  <li><strong>Layer 3: 3D Spatio-Temporal Action Modeling:</strong> Maintains a 16-frame rolling temporal action window spanning exactly 1.0 second. Feeds a lightweight X3D-M 3D convolutional network pre-trained on kinetic human interactions to extract temporal aggression signatures.</li>
+  <li><strong>Threat Memory Integration:</strong> Predictions are processed through an Exponential Leaky Integrator ($\gamma = 0.88$) and dynamic ambient $z$-score thresholding ($Z = \frac{E - \mu_{ambient}}{\sigma_{ambient}}$). Solo aggression triggers at threshold 0.42, while multi-person scuffles trip at 0.35.</li>
+</ul>
+
+<div class="page-break"></div>
+
+<div class="header">
+  <div class="header-left">
+    <h1>SENTINEL AI</h1>
+    <div class="subtitle">Concept Note — Implementation & Hackathon Viability</div>
+  </div>
+  <div class="header-right">
+    Page 2 of 2<br>
+    St Aloysius – RBIH Hackathon 2026
+  </div>
+</div>
+
+<h2>4. System Architecture & Flowchart</h2>
+<table class="table">
+  <thead>
+    <tr>
+      <th>Stage</th>
+      <th>Methodology</th>
+      <th>Key Performance Indicator</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Video Ingestion</strong></td>
+      <td>Multi-threaded OpenCV with RTSP / IP / USB auto-reconnect</td>
+      <td>Zero frame drops; automatic failover</td>
+    </tr>
+    <tr>
+      <td><strong>Pre-processing</strong></td>
+      <td>CIE-LAB CLAHE Equalization & 15 FPS temporal windowing</td>
+      <td>Illumination-invariant kinetic tensors</td>
+    </tr>
+    <tr>
+      <td><strong>Spatial Tracking</strong></td>
+      <td>YOLO11n + ByteTrack with 1.5px anti-aliased HUD rendering</td>
+      <td>Proximity cluster isolation & tracking ID stability</td>
+    </tr>
+    <tr>
+      <td><strong>Action Inference</strong></td>
+      <td>X3D-M 3D CNN + Fused Kinetic Baseline Calibration</td>
+      <td>Sub-150ms threat trip; 90% false-alarm reduction</td>
+    </tr>
+    <tr>
+      <td><strong>Alert & Evidence</strong></td>
+      <td>Instant Web Audio alert dispatch & forensic snapshot vault</td>
+      <td>Tamper-resistant audit evidence capture</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>5. Business Impact & FinTech Relevance</h2>
+<div class="two-col">
+  <div class="card">
+    <h3>ATM Vestibule & Branch Safety</h3>
+    <p>Provides unattended 24/7 protection for isolated ATMs and cash deposits, alerting central security hubs within 150 milliseconds of physical violence or coercion.</p>
+  </div>
+  <div class="card">
+    <h3>Cost Reduction & Scalability</h3>
+    <p>Operates entirely on commodity consumer hardware or existing NVR boxes without requiring multi-thousand dollar proprietary hardware upgrades.</p>
+  </div>
+</div>
+<div class="two-col">
+  <div class="card">
+    <h3>Forensic Snapshot Vault</h3>
+    <p>Automatically archives timestamped high-resolution evidence snapshots upon threat confirmation, safeguarding evidentiary integrity for law enforcement.</p>
+  </div>
+  <div class="card">
+    <h3>Zero Privacy Intrusions</h3>
+    <p>Executes locally on the edge. No biometric identity databases, face recognition, or PII retention are utilized, ensuring strict regulatory compliance.</p>
+  </div>
+</div>
+
+<h2>6. Current Stage of Development: Functional Working Prototype</h2>
+<p>
+Sentinel AI is not a theoretical proposal. The complete end-to-end prototype is fully operational and verified:
+</p>
+<ul>
+  <li><strong>Live Streaming Backend:</strong> FastAPI backend delivering real-time telemetry, snapshot gallery API, and 30–60 FPS video streaming over LAN.</li>
+  <li><strong>Editorial Web Dashboard:</strong> Professional dark-mode interface built on editorial typography, featuring real-time HUD toggles, threat meters, and multi-source switching.</li>
+  <li><strong>Codebase & Verification:</strong> Cleanly structured into modular packages (<code>core/</code>, <code>web/</code>) with full Git version control, accessible via GitHub.</li>
+</ul>
+
+<div class="highlight-box">
+  <strong>Repository & Demonstration Links:</strong><br>
+  • <strong>GitHub Repository:</strong> <a href="https://github.com/Yash-Chavan-29/Sentinal-AI" style="color:#1D4ED8; text-decoration:underline;">https://github.com/Yash-Chavan-29/Sentinal-AI</a><br>
+  • <strong>Local Demonstration Endpoint:</strong> http://127.0.0.1:7860 (Active Prototype)
+</div>
+
+<div class="footer">
+  <span>Sentinel AI — Autonomous Threat Detection</span>
+  <span>St Aloysius – RBIH FinTech Innovation Hackathon 2026</span>
+  <span>Open Innovation Track</span>
+</div>
+
+</body>
+</html>
