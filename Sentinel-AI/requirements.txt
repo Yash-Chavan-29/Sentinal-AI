@@ -1,0 +1,24 @@
+# Sentinel AI - Dependencies
+
+# Computer Vision & Deep Learning
+torch>=2.4.0
+torchvision>=0.19.0
+pytorchvideo>=0.1.5
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+
+# 3D CNN Support
+fvcore
+iopath
+
+# Model Hub & Web Interface
+huggingface_hub>=0.24.0
+gradio>=5.0.0
+matplotlib>=3.7.0
+
+# Utilities
+numpy
+pyyaml
+pillow
+tqdm
+

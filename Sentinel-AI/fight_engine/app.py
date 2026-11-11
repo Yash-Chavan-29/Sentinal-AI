@@ -1,0 +1,1523 @@
+"""
+Safe School AI — Violence Detection (Gradio Space)
+
+Clean dashboard-style demo built on top of a 3D-CNN inference pipeline.
+
+UI architecture
+---------------
+* Top header with title + subtitle + small tag chips.
+* Two-column dashboard (CSS-grid, equal height):
+    LEFT  — video viewport, status bar, model dropdowns, Analyze, progress.
+    RIGHT — top row (Violence Risk + Confidence), bottom (Timeline plot).
+* Two collapsed accordions for the decision trace and advanced metrics.
+
+CSS architecture
+----------------
+* All custom styles are scoped via `.svd-*` class names.
+* No internal Gradio/Svelte class selectors are used (.wrap / .secondary-wrap /
+  [class*="svelte-"]). The layout is built with our own wrappers and CSS
+  grid/flex, so it survives Gradio version bumps.
+* Loading overlays for the three result panels and the video viewport are
+  pure CSS — the spinner stays centered regardless of panel size.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import logging
+from pathlib import Path
+from typing import List
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+_SV_DIR = _THIS_DIR / "sv_model"
+if str(_SV_DIR) not in sys.path:
+    sys.path.insert(0, str(_SV_DIR))
+
+import gradio as gr
+import matplotlib
+
+matplotlib.use("Agg")  # Headless backend for HF Spaces
+import matplotlib.pyplot as plt
+import torch
+
+try:
+    from model_loader import (
+        EARLY_WARNING_CONSECUTIVE,
+        MODEL_SPECS,
+        TIMELINE_OVERLAP,
+        TIMELINE_WINDOWS,
+        ViolenceModelLoader,
+        list_baseline_specs,
+        list_final_specs,
+    )
+    from temporal_analyzer import (
+        TimelineResult,
+        iter_video_timeline_steps,
+        risk_level,
+    )
+    from video_utils import ensure_browser_playable
+    from live_camera import live_camera_predictions
+except ImportError:
+    from .model_loader import (
+        EARLY_WARNING_CONSECUTIVE,
+        MODEL_SPECS,
+        TIMELINE_OVERLAP,
+        TIMELINE_WINDOWS,
+        ViolenceModelLoader,
+        list_baseline_specs,
+        list_final_specs,
+    )
+    from .temporal_analyzer import (
+        TimelineResult,
+        iter_video_timeline_steps,
+        risk_level,
+    )
+    from .video_utils import ensure_browser_playable
+    from .live_camera import live_camera_predictions
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEFAULT_MODEL = "final_x3d_realtime"
+LOADER = ViolenceModelLoader(device=DEVICE, max_cached=1)
+
+
+def _preload_default() -> None:
+    try:
+        LOADER.load(DEFAULT_MODEL)
+        logger.info("Preloaded default model: %s", DEFAULT_MODEL)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Failed to preload %s: %s", DEFAULT_MODEL, exc)
+
+
+_preload_default()
+
+
+# ═════════════════════════ color tokens ═════════════════════════
+CYAN = "#22d3ee"
+CYAN_DEEP = "#0891b2"
+CYAN_HOVER = "#0ea5e9"
+EMERALD = "#10b981"
+
+SLATE_300 = "#cbd5e1"
+SLATE_400 = "#94a3b8"
+SLATE_500 = "#64748b"
+SLATE_700 = "#334155"
+SLATE_800 = "#1e293b"
+SLATE_900 = "#0f172a"
+
+PANEL_BG = "rgba(10,18,38,.92)"           # cinematic deep navy card
+PANEL_BORDER = "rgba(148,163,184,.55)"    # slate-400 @ 55% — clearly visible on navy
+PANEL_DIVIDER = "rgba(255,255,255,.06)"   # header divider
+
+NAVY_BG = "#0a1226"
+NAVY_BG_SOLID = "#0a1226"
+TEXT_HI = "#e2e8f0"
+TEXT_LO = "#94a3b8"
+
+AMBER = "#f59e0b"
+RED = "#ff4d4f"
+RED_DEEP = "#dc2626"
+RED_TEXT = "#fca5a5"
+
+
+# ═════════════════════════ timeline plot ═════════════════════════
+
+_PLOT_BG = "#0a1226"
+
+
+def _make_timeline_plot(result: TimelineResult) -> plt.Figure:
+    """Cyan trend line, red markers above τ, slate below. Calm palette."""
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(10, 3.4), dpi=110)
+    fig.patch.set_facecolor(_PLOT_BG)
+    ax.set_facecolor(_PLOT_BG)
+
+    xs = [w.mid_sec for w in result.windows]
+    ys = [w.violent_prob for w in result.windows]
+
+    ax.axhspan(result.threshold, 1.0, color=RED, alpha=0.04, zorder=0)
+    ax.plot(xs, ys, "-", color=CYAN, linewidth=1.8, zorder=2, alpha=0.95)
+
+    for w in result.windows:
+        if w.violent_prob >= result.threshold:
+            face, edge = RED, RED_TEXT
+        else:
+            face, edge = CYAN_DEEP, CYAN
+        ax.scatter(
+            w.mid_sec, w.violent_prob,
+            color=face, s=62, zorder=3,
+            edgecolors=edge, linewidths=0.9,
+        )
+
+    ax.axhline(
+        result.threshold,
+        linestyle="--", color=RED, linewidth=1.0, alpha=0.45,
+        label=f"τ = {result.threshold:.2f}", zorder=1,
+    )
+
+    ax.set_xlim(0, max(result.duration_sec, max(xs) if xs else 1))
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("Time (seconds)", color=TEXT_LO, fontsize=10)
+    ax.set_ylabel("P(violent)", color=TEXT_LO, fontsize=10)
+    ax.tick_params(colors=SLATE_500, labelsize=9)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("bottom", "left"):
+        ax.spines[side].set_color(SLATE_800)
+    ax.legend(loc="upper right", framealpha=0.0, fontsize=8, labelcolor=TEXT_LO)
+    ax.grid(True, color=SLATE_800, linestyle=":", linewidth=0.4)
+
+    plt.tight_layout(pad=1.0)
+    return fig
+
+
+def _placeholder_timeline_plot() -> plt.Figure:
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(10, 3.4), dpi=110)
+    fig.patch.set_facecolor(_PLOT_BG)
+    ax.set_facecolor(_PLOT_BG)
+    ax.set_xlim(0, 5)
+    ax.set_ylim(0, 1.0)
+    ax.set_xlabel("Time (seconds)", color=TEXT_LO, fontsize=10)
+    ax.set_ylabel("P(violent)", color=TEXT_LO, fontsize=10)
+    ax.tick_params(colors=SLATE_500, labelsize=9)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("bottom", "left"):
+        ax.spines[side].set_color(SLATE_800)
+    ax.grid(True, color=SLATE_800, linestyle=":", linewidth=0.4)
+    ax.text(
+        0.5, 0.5, "Timeline will appear here after analysis",
+        ha="center", va="center", transform=ax.transAxes,
+        color=SLATE_500, fontsize=11,
+    )
+    plt.tight_layout(pad=1.0)
+    return fig
+
+
+def _blank_timeline_plot() -> plt.Figure:
+    """Same as placeholder but without the hint text — used during analysis
+    so the overlay spinner doesn't visually conflict with placeholder copy."""
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(10, 3.4), dpi=110)
+    fig.patch.set_facecolor(_PLOT_BG)
+    ax.set_facecolor(_PLOT_BG)
+    ax.set_xlim(0, 5)
+    ax.set_ylim(0, 1.0)
+    ax.set_xlabel("Time (seconds)", color=TEXT_LO, fontsize=10)
+    ax.set_ylabel("P(violent)", color=TEXT_LO, fontsize=10)
+    ax.tick_params(colors=SLATE_500, labelsize=9)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("bottom", "left"):
+        ax.spines[side].set_color(SLATE_800)
+    ax.grid(True, color=SLATE_800, linestyle=":", linewidth=0.4)
+    plt.tight_layout(pad=1.0)
+    return fig
+
+
+# ═════════════════════════ HTML panels ═════════════════════════
+
+
+def _card_title(text: str) -> str:
+    return f'<div class="svd-card-title">{text}</div>'
+
+
+def _loading_overlay(message: str) -> str:
+    """Generic centered spinner overlay used by all three result panels."""
+    return (
+        '<div class="svd-loading-overlay">'
+        '<div class="svd-loading-spinner"></div>'
+        f'<div class="svd-loading-text">{message}</div>'
+        '</div>'
+    )
+
+
+# ─── Risk card ─────────────────────────────────────────────────
+
+
+def _render_risk_card(result: TimelineResult, level: str) -> str:
+    """HIGH = red, MEDIUM = amber, LOW = cyan. Only HIGH uses red."""
+    level_u = level.upper()
+    if level_u == "HIGH":
+        level_color = RED
+        subtitle = "Potential violent interaction detected"
+    elif level_u == "MEDIUM":
+        level_color = AMBER
+        subtitle = "Suspicious motion — verify scene"
+    else:
+        level_color = CYAN
+        subtitle = "No violent activity detected"
+
+    pct = result.aggregated_violent_prob * 100
+    return f"""
+    <div class="svd-card svd-risk-card">
+      {_card_title("Violence Risk")}
+      <div class="svd-card-body svd-risk-body">
+        <div class="svd-risk-level" style="color:{level_color};">{level_u}</div>
+        <div class="svd-risk-percent">{pct:.0f}%</div>
+        <div class="svd-risk-subtitle">{subtitle}</div>
+      </div>
+    </div>
+    """
+
+
+def _risk_card_placeholder() -> str:
+    return f"""
+    <div class="svd-card svd-risk-card">
+      {_card_title("Violence Risk")}
+      <div class="svd-card-body svd-risk-body">
+        <div class="svd-risk-level" style="color:{SLATE_700};">—</div>
+        <div class="svd-risk-subtitle">
+          Upload a video and click
+          <b style="color:{TEXT_LO};">Analyze</b>.
+        </div>
+      </div>
+    </div>
+    """
+
+
+def _risk_card_loading() -> str:
+    return f"""
+    <div class="svd-card svd-risk-card">
+      {_card_title("Violence Risk")}
+      <div class="svd-card-body svd-risk-body">
+        {_loading_overlay("Analyzing risk…")}
+      </div>
+    </div>
+    """
+
+
+# ─── Confidence panel (REPLACES gr.Label) ──────────────────────
+
+
+def _render_confidence_panel(violent_prob: float | None = None) -> str:
+    if violent_prob is None:
+        return f"""
+        <div class="svd-card svd-confidence-card">
+          {_card_title("Confidence (aggregated)")}
+          <div class="svd-card-body svd-confidence-content svd-confidence-empty">
+            Run an analysis to see confidence breakdown.
+          </div>
+        </div>
+        """
+
+    v = max(0.0, min(1.0, violent_prob))
+    nv = 1.0 - v
+    return f"""
+    <div class="svd-card svd-confidence-card">
+      {_card_title("Confidence (aggregated)")}
+      <div class="svd-card-body svd-confidence-content">
+        <div class="svd-confidence-row">
+          <div class="svd-confidence-top">
+            <span class="svd-row-label">Violent</span>
+            <span class="svd-row-pct">{v * 100:.0f}%</span>
+          </div>
+          <div class="svd-bar-track">
+            <div class="svd-bar-fill violent" style="width:{v * 100:.1f}%"></div>
+          </div>
+        </div>
+        <div class="svd-confidence-row">
+          <div class="svd-confidence-top">
+            <span class="svd-row-label">Non-Violent</span>
+            <span class="svd-row-pct">{nv * 100:.0f}%</span>
+          </div>
+          <div class="svd-bar-track">
+            <div class="svd-bar-fill safe" style="width:{nv * 100:.1f}%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+
+
+def _confidence_loading_panel() -> str:
+    return f"""
+    <div class="svd-card svd-confidence-card">
+      {_card_title("Confidence (aggregated)")}
+      <div class="svd-card-body svd-confidence-content">
+        {_loading_overlay("Running 3D CNN inference…")}
+      </div>
+    </div>
+    """
+
+
+# ─── Timeline overlay (Plot stays mounted; overlay HTML toggles) ─
+
+def _timeline_overlay_loading() -> str:
+    return f'<div class="svd-timeline-overlay">{_loading_overlay("Generating temporal confidence…")}</div>'
+
+
+def _timeline_overlay_hidden() -> str:
+    return ""
+
+
+# ─── Progress line (slim, inline) ─────────────────────────────
+
+
+_TOTAL_STEPS = 5
+
+
+def _progress_line(
+    *, step_label: str, percent: float, step_num: int, state: str = "running"
+) -> str:
+    pct = max(0.0, min(100.0, percent))
+    if state == "error":
+        bar_color = RED
+        label_color = RED_TEXT
+        icon = "❌"
+        title = step_label
+    elif state == "done":
+        bar_color = CYAN
+        label_color = "#a5f3fc"
+        icon = "✓"
+        title = "Analysis complete"
+    else:
+        bar_color = CYAN
+        label_color = "#cffafe"
+        icon = "⏳"
+        title = step_label
+
+    return f"""
+    <div class="svd-progress-line">
+      <div class="svd-progress-row">
+        <span><span style="margin-right:4px;">{icon}</span>
+          <span style="color:{SLATE_500};">Step {step_num}/{_TOTAL_STEPS}</span>
+          <span style="color:{label_color};">· {title}</span></span>
+        <span style="color:{label_color};font-variant-numeric:tabular-nums;font-weight:600;">
+          {pct:4.0f}%</span>
+      </div>
+      <div class="svd-progress-track">
+        <div class="svd-progress-fill" style="width:{pct:.1f}%;background:{bar_color};"></div>
+      </div>
+    </div>
+    """
+
+
+def _step_number_for(label: str) -> int:
+    if label.startswith("Loading"):
+        return 1
+    if label.startswith("Sampling"):
+        return 2
+    if label.startswith("Running"):
+        return 3
+    if label.startswith("Temporal"):
+        return 4
+    if label.startswith("Generating"):
+        return 5
+    if label.startswith("Analysis complete"):
+        return _TOTAL_STEPS
+    return 0
+
+
+# ─── Markdown blocks (accordions) ─────────────────────────────
+
+
+def _render_explain_block(result: TimelineResult, spec) -> str:
+    return (
+        "_Alert triggered when **P(violent)** stays above **τ** for "
+        "**N consecutive windows** (max-pool aggregation)._\n\n"
+        "| Parameter | Value |\n"
+        "|---|---|\n"
+        f"| Decision threshold (τ) | `{spec.threshold}` |\n"
+        f"| Consecutive windows required (N) | `{result.consecutive_required}` |\n"
+        f"| Max consecutive above τ in this clip | `{result.consecutive_count}` |\n"
+        f"| Smoothing rule | `max-pool across windows` |\n"
+        f"| Final state | **{result.state_emoji} {result.state}** |\n"
+    )
+
+
+def _render_tech_details(result: TimelineResult, spec) -> str:
+    n_windows = len(result.windows)
+    avg_inf = result.inference_ms_total / max(n_windows, 1)
+    sec_per_window = result.duration_sec / max(n_windows, 1)
+    realtime_factor = (sec_per_window * 1000) / max(avg_inf, 0.001)
+    realtime_str = (
+        f"✓ {realtime_factor:.1f}× realtime" if realtime_factor >= 1.0
+        else f"⚠ {realtime_factor:.2f}× realtime"
+    )
+    return (
+        "**Model**: " + spec.display_name
+        + f" (`{spec.backbone}`, {spec.parameters_m:.1f}M params)\n\n"
+        "| Metric | Value |\n"
+        "|---|---|\n"
+        f"| Inference time (per window) | **{avg_inf:.0f} ms** |\n"
+        f"| Inference time (total, {n_windows} windows) | {result.inference_ms_total:.0f} ms |\n"
+        f"| Preprocessing time | {result.pre_ms_total:.0f} ms |\n"
+        f"| Video duration | {result.duration_sec:.1f}s @ {result.fps:.0f} fps |\n"
+        f"| Realtime capability | {realtime_str} |\n"
+        f"| Frames per window | {spec.num_frames} |\n"
+        f"| Frame size | {spec.frame_size}×{spec.frame_size} |\n"
+        f"| Validation F1 | {spec.accuracy * 100:.2f}% |\n"
+        f"| Device | `{LOADER.device}` |\n"
+    )
+
+
+# ═════════════════════════ inference handler ═════════════════════════
+
+
+def _resolve_model_name(model_display_name: str) -> str:
+    name = LOADER.display_to_name(model_display_name)
+    return name or DEFAULT_MODEL
+
+
+_NOOP = gr.update()
+
+
+def predict(video_path: str | None, model_display_name: str):
+    """Streaming pipeline.
+
+    Outputs (7-tuple) in this order:
+      progress · risk · confidence · timeline · timeline_overlay · explain · tech
+    """
+    if video_path is None:
+        yield (
+            gr.update(visible=False, value=""),
+            _risk_card_placeholder(),
+            _render_confidence_panel(None),
+            _placeholder_timeline_plot(),
+            _timeline_overlay_hidden(),
+            "_Upload a video (4–10s) and click **Analyze** to see the decision trace._",
+            "",
+        )
+        return
+
+    name = _resolve_model_name(model_display_name)
+
+    # Pre-step: clear stale panels + show loading overlays
+    yield (
+        gr.update(
+            visible=True,
+            value=_progress_line(
+                step_label="Preparing model", percent=2.0, step_num=1, state="running",
+            ),
+        ),
+        _risk_card_loading(),
+        _confidence_loading_panel(),
+        _blank_timeline_plot(),
+        _timeline_overlay_loading(),
+        "_Analyzing…_",
+        "",
+    )
+
+    try:
+        model, spec = LOADER.load(name)
+
+        final_result: TimelineResult | None = None
+        for step_label, percent, partial in iter_video_timeline_steps(
+            video_path,
+            model=model,
+            device=LOADER.device,
+            backbone=spec.backbone,
+            num_frames=spec.num_frames,
+            frame_size=spec.frame_size,
+            threshold=spec.threshold,
+            num_windows=TIMELINE_WINDOWS,
+            overlap=TIMELINE_OVERLAP,
+            consecutive_required=EARLY_WARNING_CONSECUTIVE,
+        ):
+            if partial is not None:
+                final_result = partial
+                continue
+
+            yield (
+                gr.update(
+                    visible=True,
+                    value=_progress_line(
+                        step_label=step_label,
+                        percent=percent,
+                        step_num=_step_number_for(step_label),
+                        state="running",
+                    ),
+                ),
+                _NOOP, _NOOP, _NOOP, _NOOP, _NOOP, _NOOP,
+            )
+
+        assert final_result is not None
+        result = final_result
+
+        level, _ = risk_level(result.aggregated_violent_prob)
+
+        # Atomic populate of all result panels + hide overlays
+        yield (
+            gr.update(
+                visible=True,
+                value=_progress_line(
+                    step_label="Analysis complete",
+                    percent=100.0, step_num=_TOTAL_STEPS, state="done",
+                ),
+            ),
+            _render_risk_card(result, level),
+            _render_confidence_panel(result.aggregated_violent_prob),
+            _make_timeline_plot(result),
+            _timeline_overlay_hidden(),
+            _render_explain_block(result, spec),
+            _render_tech_details(result, spec),
+        )
+
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Inference failed")
+        error_card = f"""
+        <div class="svd-card svd-risk-card" style="border-top-color:{RED};">
+          {_card_title("Violence Risk")}
+          <div class="svd-card-body svd-risk-body">
+            <div style="font-size:16px;font-weight:600;color:{RED_TEXT};">
+              ❌ Inference failed
+            </div>
+          </div>
+        </div>
+        """
+        yield (
+            gr.update(
+                visible=True,
+                value=_progress_line(
+                    step_label=f"Inference failed: {exc}",
+                    percent=100.0, step_num=_TOTAL_STEPS, state="error",
+                ),
+            ),
+            error_card,
+            _render_confidence_panel(None),
+            _placeholder_timeline_plot(),
+            _timeline_overlay_hidden(),
+            f"_Inference failed:_ `{exc}`",
+            "",
+        )
+
+
+
+# LIVE_CAMERA_INTEGRATION
+
+def predict_live(stream_url, model_display_name):
+    """Run continuous violence detection from an IP camera."""
+
+    if not stream_url or not stream_url.strip():
+        raise gr.Error("Please enter your camera stream URL.")
+
+    name = _resolve_model_name(model_display_name)
+
+    try:
+        model, spec = LOADER.load(name)
+
+        yield from live_camera_predictions(
+            stream_url.strip(),
+            model,
+            LOADER.device,
+            backbone=spec.backbone,
+            num_frames=spec.num_frames,
+            frame_size=spec.frame_size,
+            threshold=spec.threshold,
+        )
+
+    except Exception as exc:
+        logger.exception("Live camera failed.")
+        raise gr.Error(f"Live camera error: {exc}") from exc
+
+
+# ═════════════════════════ category dropdown ═════════════════════════
+
+
+GROUP_FINAL = "Final models"
+GROUP_BASE = "Base models"
+GROUP_ALL = "All models"
+GROUP_CHOICES = [GROUP_FINAL, GROUP_BASE, GROUP_ALL]
+DEFAULT_GROUP = GROUP_FINAL
+
+
+def _choices_for_group(group: str) -> List[str]:
+    if group == GROUP_BASE:
+        specs = list_baseline_specs()
+    elif group == GROUP_ALL:
+        specs = list_final_specs() + list_baseline_specs()
+    else:
+        specs = list_final_specs()
+    return [s.display_name for s in specs]
+
+
+def _on_group_change(group: str, current_model: str):
+    choices = _choices_for_group(group)
+    value = current_model if current_model in choices else choices[0]
+    return gr.update(choices=choices, value=value)
+
+
+# ═════════════════════════ CSS ═════════════════════════
+#
+# Rules:
+#   • All custom selectors are scoped with the `.svd-` prefix.
+#   • We never target Gradio/Svelte internal classes (`.wrap`,
+#     `.secondary-wrap`, `[class*="svelte-"]`, etc.). Layout is built with
+#     our own wrappers so the result is stable across Gradio versions.
+#   • Loading overlays use `position:absolute` inside a `position:relative`
+#     panel body so the spinner is always perfectly centered, no matter
+#     the panel height.
+
+_GLOBAL_CSS = f"""
+/* ── keyframes ───────────────────────────────────────────── */
+@keyframes svdPulse {{
+    0%, 100% {{ opacity: 1; }}
+    50%      {{ opacity: 0.35; }}
+}}
+@keyframes svdSpin {{ to {{ transform: rotate(360deg); }} }}
+@keyframes svdFadeIn {{
+    from {{ opacity: 0; }}
+    to   {{ opacity: 1; }}
+}}
+
+/* ── shared tokens (kept as CSS vars so panels coordinate) ── */
+.svd-app {{
+    --svd-panel-bg: {PANEL_BG};
+    --svd-panel-border: {PANEL_BORDER};
+    --svd-panel-divider: {PANEL_DIVIDER};
+    --svd-text-hi: {TEXT_HI};
+    --svd-text-lo: {TEXT_LO};
+    --svd-cyan: {CYAN};
+    --svd-cyan-deep: {CYAN_DEEP};
+    --svd-red: {RED};
+    --svd-radius: 22px;
+    --svd-radius-lg: 34px;
+    --svd-gap: 22px;
+}}
+
+/* ── header tag chips ──────────────────────────────────── */
+.svd-tag {{
+    display: inline-block;
+    padding: 4px 10px;
+    margin: 2px 4px;
+    background: {SLATE_800};
+    color: {TEXT_LO};
+    border-radius: 14px;
+    font-size: 12px;
+    border: 1px solid {SLATE_700};
+}}
+
+/* ══════════════════════════════════════════════════════════════
+   MAIN GRID — equal-height columns, no dead-space.
+   ══════════════════════════════════════════════════════════════ */
+
+.svd-main-row {{
+    display: grid !important;
+    grid-template-columns: 52fr 48fr;
+    /* Wider horizontal gap between LEFT and RIGHT columns — matches the
+       ~36px vertical gap between the dropdown row and the Analyze
+       button (column gap 22px + .svd-model-row margin-bottom 14px). */
+    gap: 36px !important;
+    align-items: stretch !important;
+}}
+.svd-main-row > * {{
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: auto;
+}}
+
+.svd-left-col,
+.svd-right-col {{
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--svd-gap) !important;
+    min-width: 0 !important;
+}}
+
+/* The left column has a fixed-height video at the top and grows the
+   space between video and progress so its overall height matches the
+   right column. */
+.svd-left-col > * {{
+    flex: 0 0 auto;
+}}
+.svd-left-col .svd-left-spacer {{ flex: 1 1 auto; }}
+
+/* Extra breathing room between the dropdown row and the Analyze button.
+   The column gap is `--svd-gap` (22px) by default; this pushes the gap
+   below the dropdowns to ~36px so Analyze sits clearly separated from
+   the model-picker pair above it. */
+.svd-model-row {{ margin-bottom: 14px !important; }}
+
+/* ══════════════════════════════════════════════════════════════
+   LEFT COLUMN — video, status, dropdowns, button, progress
+   ══════════════════════════════════════════════════════════════ */
+
+/* Video viewport — fixed-height frame. Previously had flex:1 1 auto so
+   it stretched to match the right column, but the stretched space sat
+   *above* the dropdowns/Analyze button and absorbed clicks (you couldn't
+   open the file picker). We rely on .svd-left-spacer for vertical
+   matching instead. */
+.svd-video-frame {{
+    position: relative !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+    background: {NAVY_BG} !important;
+    /* The Gradio video player fills edge-to-edge, so a normal border
+       gets visually covered. inset box-shadow paints on top of children
+       and is always visible. */
+    box-shadow: inset 0 0 0 1px {PANEL_BORDER} !important;
+    border: 1px solid transparent !important;
+    min-height: 460px !important;
+    flex: 0 0 auto !important;
+
+    # position: relative !important;
+    # border-radius: 40px !important;
+    # overflow: hidden !important;
+    # background: #0a1226 !important;
+
+    # box-shadow:
+    #     inset 0 0 0 1px rgba(148,163,184,.55),
+    #     0 10px 30px rgba(0,0,0,.22) !important;
+
+    # border: 1px solid transparent !important;
+
+    # min-height: 460px !important;
+    # flex: 0 0 auto !important;
+}}
+
+.svd-video-frame video {{
+    background: {NAVY_BG};
+}}
+
+/* Hide only the 3-button edit toolbar (🔄 Undo / ✂ Trim / ✕ Clear/Remove)
+   Gradio overlays on top of a loaded video — they cover the top-right
+   corner and we already have a dedicated "📁 Upload Video" button.
+   Other buttons inside the frame (fullscreen, play, etc.) are NOT
+   targeted — only these three aria-labels. Case-insensitive match (i)
+   covers the variants Gradio uses ("Reset" vs "Undo", "Remove" vs
+   "Clear") across versions. */
+.svd-video-frame button[aria-label="Undo" i],
+.svd-video-frame button[aria-label="Reset" i],
+.svd-video-frame button[aria-label="Trim" i],
+.svd-video-frame button[aria-label="Clear" i],
+.svd-video-frame button[aria-label="Remove" i],
+.svd-video-frame button[aria-label*="trim" i],
+.svd-video-frame button[aria-label*="clear" i],
+.svd-video-frame button[aria-label*="undo" i],
+.svd-video-frame button[aria-label*="reset" i],
+.svd-video-frame button[aria-label*="remove" i] {{
+    display: none !important;
+}}
+
+/* Upload Video button — paired with the drop-zone above. Secondary
+   styling (outlined, transparent) so it complements the cyan primary
+   Analyze button without competing for attention. */
+.svd-upload-btn {{
+    margin-top: 8px !important;
+    margin-bottom: 8px !important;
+}}
+.svd-upload-btn button {{
+    height: 42px !important;
+    min-height: 42px !important;
+    width: 100% !important;
+    padding: 0 18px !important;
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: .01em;
+    border-radius: 10px !important;
+    background: transparent !important;
+    border: 1px solid {PANEL_BORDER} !important;
+    color: {TEXT_HI} !important;
+    box-shadow: none !important;
+    transition: border-color 150ms ease, background 150ms ease;
+}}
+.svd-upload-btn button:hover {{
+    border-color: {CYAN_DEEP} !important;
+    background: rgba(8,145,178,.08) !important;
+}}
+.svd-upload-btn button:active {{ transform: translateY(1px); }}
+
+/* Small hint sitting under the Upload button.
+   pointer-events:none so it can never absorb a click meant for the
+   button above it. */
+.svd-video-hint {{
+    color: {TEXT_LO};
+    font-size: 12px;
+    line-height: 1.3;
+    padding: 6px 4px 0;
+    letter-spacing: 0.01em;
+    text-align: center;
+    pointer-events: none;
+}}
+
+/* Dropdown row — 35 / 65 columns, clean compact pills. */
+.svd-model-row {{
+    display: grid !important;
+    grid-template-columns: 35fr 65fr;
+    gap: 10px !important;
+    align-items: center !important;
+}}
+.svd-model-row > * {{
+    min-width: 0 !important;
+}}
+
+/* Analyze button — full width, cyan primary. */
+.svd-analyze-btn {{ margin: 0 !important; }}
+.svd-analyze-btn button {{
+    height: 63px !important;
+    min-height: 63px !important;
+    width: 100% !important;
+    padding: 0 20px !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    letter-spacing: .02em;
+    border-radius: 10px !important;
+    background: {CYAN_DEEP} !important;
+    border: 1px solid {CYAN_DEEP} !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+    transition: filter 150ms ease, transform 80ms ease;
+}}
+.svd-analyze-btn button:hover {{ filter: brightness(1.12) !important; }}
+.svd-analyze-btn button:active {{ transform: translateY(1px); }}
+
+/* Progress line under Analyze. */
+.svd-progress-line {{ padding: 4px 2px 0; }}
+.svd-progress-row {{
+    display: flex; justify-content: space-between;
+    font-size: 11.5px; line-height: 1.4;
+}}
+.svd-progress-track {{
+    margin-top: 4px; height: 3px;
+    background: rgba(120,140,180,.12);
+    border-radius: 999px; overflow: hidden;
+}}
+.svd-progress-fill {{
+    height: 100%; border-radius: 999px;
+    transition: width 200ms ease-out;
+}}
+
+/* ══════════════════════════════════════════════════════════════
+   RADIUS ENFORCEMENT
+   Gradio's Soft theme paints its own background + radius on the
+   block wrappers around each component. If those wrappers keep a
+   smaller radius than ours, our rounded panels still get visually
+   "squared" by the parent box that paints behind/around them.
+   We grant the panel's radius to the immediate Gradio block parent
+   (and its direct children) by selecting parents that contain one
+   of our scoped panel classes — no Gradio/Svelte class name is
+   used, only :has() with our own classes.
+   ══════════════════════════════════════════════════════════════ */
+
+# .svd-app *:has(> .svd-panel-host),
+# .svd-app *:has(> .svd-timeline-wrap),
+# .svd-app *:has(> .svd-video-frame) {{
+#     border-radius: var(--svd-radius-lg) !important;
+#     background: transparent !important;
+#     overflow: visible !important;
+#     padding: 0 !important;
+# }}
+
+.svd-app *:has(> .svd-panel-host),
+.svd-app *:has(> .svd-timeline-wrap),
+.svd-app *:has(> .svd-video-frame) {{
+
+    background: transparent !important;
+
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+
+    border-radius: 0 !important;
+
+    padding: 0 !important;
+    overflow: visible !important;
+}}
+
+/* ══════════════════════════════════════════════════════════════
+   RIGHT COLUMN — top row (Risk + Confidence), bottom Timeline
+   ══════════════════════════════════════════════════════════════ */
+
+.svd-right-col {{
+    /* Lets bottom timeline panel grow to fill the height. */
+}}
+.svd-right-col > * {{ flex: 0 0 auto; }}
+.svd-right-col > .svd-timeline-wrap {{ flex: 1 1 auto; }}
+
+/* Top row: equal-height grid, no `align-items: stretch` shenanigans. */
+.svd-top-row {{
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px !important;
+    align-items: stretch !important;
+}}
+.svd-top-row > * {{
+    display: flex !important;
+    flex-direction: column !important;
+    min-width: 0 !important;
+}}
+
+/* ── Panel host (Gradio gr.HTML wrapper for Risk + Confidence) ─
+   We give the host the border + radius + background so the rendered
+   card visually fills its block (mirrors how gr.Accordion renders its
+   own bordered shell). The inner .svd-card just provides layout
+   structure with no extra border / background of its own. */
+.svd-panel-host {{
+    background: rgba(10,18,38,.92) !important;
+    border: 1px solid rgba(148,163,184,.28) !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 240px !important;
+    box-shadow: 0 4px 14px rgba(0,0,0,.18) !important;
+}}
+.svd-panel-host > * {{
+    width: 100% !important;
+}}
+
+.svd-panel-host > div {{
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+}}
+
+/* ── Card shell ───────────────────────────────────────────── */
+.svd-card {{
+    position: relative;
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+    min-height: 240px;
+}}
+
+.svd-card-title {{
+    text-align: center;
+    color: {TEXT_HI};
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    padding: 14px 18px;
+    border-bottom: 1px solid {PANEL_DIVIDER};
+    flex: 0 0 auto;
+}}
+
+.svd-card-body {{
+    position: relative;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}}
+
+/* ── Risk card ────────────────────────────────────────────── */
+.svd-risk-body {{
+    text-align: center;
+    padding: 18px 16px 22px;
+    justify-content: center;
+}}
+.svd-risk-level {{
+    font-size: 56px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0 0 6px;
+}}
+.svd-risk-percent {{
+    font-size: 32px;
+    font-weight: 700;
+    color: {TEXT_HI};
+    margin-bottom: 10px;
+    font-variant-numeric: tabular-nums;
+}}
+.svd-risk-subtitle {{
+    font-size: 12px;
+    color: {SLATE_500};
+    opacity: .82;
+    line-height: 1.4;
+}}
+
+/* ── Confidence panel ─────────────────────────────────────── */
+.svd-confidence-content {{
+    padding: 18px 18px 18px;
+    justify-content: center;
+}}
+.svd-confidence-empty {{
+    color: {SLATE_500};
+    font-size: 12px;
+    text-align: center;
+    padding: 24px 14px;
+    align-items: center;
+}}
+.svd-confidence-row {{ margin-bottom: 14px; }}
+.svd-confidence-row:last-child {{ margin-bottom: 0; }}
+.svd-confidence-top {{
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 12.5px;
+}}
+.svd-row-label {{ font-weight: 600; color: {TEXT_HI}; }}
+.svd-row-pct   {{ color: {TEXT_LO}; font-variant-numeric: tabular-nums; }}
+.svd-bar-track {{
+    height: 6px;
+    background: rgba(120,140,180,.12);
+    border-radius: 999px;
+    overflow: hidden;
+}}
+.svd-bar-fill {{
+    height: 100%;
+    border-radius: 999px;
+    transition: width 280ms ease-out;
+}}
+.svd-bar-fill.violent {{ background: {RED}; }}
+.svd-bar-fill.safe    {{ background: {CYAN}; }}
+
+/* ── Timeline panel (Plot hosted inside our own card) ────── */
+.svd-timeline-wrap {{
+    position: relative;
+    background: {PANEL_BG} !important;
+    border: 1px solid {PANEL_BORDER} !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+    display: flex;
+    flex-direction: column;
+    min-height: 280px;
+    margin-top: 10px !important;
+}}
+.svd-timeline-wrap .svd-card-title {{
+    flex: 0 0 auto;
+    /* More breathing room below the title so the plot below it doesn't
+       feel pinned right under the heading. Matches the spacing the Risk
+       hero gets between its title and the giant level glyph. */
+    padding: 16px 18px 22px !important;
+    border-bottom: 1px solid {PANEL_DIVIDER} !important;
+}}
+.svd-timeline-body {{
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    /* Match the inset that the Risk card body has (18px sides, 22px
+       bottom) so all three cards share a consistent internal margin. */
+    padding: 18px 16px 22px;
+    display: flex;
+    flex-direction: column;
+}}
+.svd-timeline-body img,
+.svd-timeline-body canvas {{
+    width: 100% !important;
+    display: block;
+}}
+
+/* Timeline overlay — must absolutely cover the plot regardless of how
+   Gradio wraps the gr.HTML component. We tag the HTML host with the
+   `svd-timeline-overlay-host` class via elem_classes so we can target
+   the wrapper itself (Gradio puts the host on the wrapping <div>) and
+   pull it out of normal flow on top of the plot. */
+.svd-timeline-body {{
+    position: relative;
+}}
+.svd-timeline-overlay-host {{
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 4;
+    pointer-events: none;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}}
+.svd-timeline-overlay {{
+    position: absolute !important;
+    inset: 0 !important;
+    pointer-events: none;
+    z-index: 4;
+}}
+
+/* ══════════════════════════════════════════════════════════════
+   LOADING OVERLAY — centered spinner + text, blurred backdrop
+   ══════════════════════════════════════════════════════════════ */
+
+.svd-loading-overlay {{
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(10,18,38,.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    animation: svdFadeIn 200ms ease-out;
+    border-radius: inherit;
+    z-index: 3;
+    pointer-events: auto;
+}}
+.svd-loading-spinner {{
+    width: 42px; height: 42px;
+    border: 3px solid {SLATE_700};
+    border-top-color: {CYAN};
+    border-radius: 50%;
+    animation: svdSpin 0.85s linear infinite;
+}}
+.svd-loading-text {{
+    color: {TEXT_HI};
+    font-size: 12.5px;
+    font-weight: 500;
+    opacity: 0.92;
+    letter-spacing: 0.01em;
+}}
+
+/* Small inline spinner used in compact contexts. */
+.svd-spinner {{
+    display: inline-block;
+    width: 11px; height: 11px;
+    border: 2px solid {SLATE_700};
+    border-top-color: {CYAN};
+    border-radius: 50%;
+    animation: svdSpin 0.8s linear infinite;
+    vertical-align: -2px;
+    margin-right: 6px;
+}}
+
+/* ══════════════════════════════════════════════════════════════
+   ACCORDIONS — subtle, scoped only via container class
+   ══════════════════════════════════════════════════════════════ */
+.svd-accordion {{
+    background: transparent !important;
+    border: 1px solid {PANEL_BORDER} !important;
+    border-radius: 12px !important;
+    margin-top: 8px !important;
+}}
+
+/* ══════════════════════════════════════════════════════════════
+   THIN CUSTOM SCROLLBAR (panel-internal scroll only)
+   ══════════════════════════════════════════════════════════════ */
+.svd-card-body::-webkit-scrollbar {{ width: 6px; }}
+.svd-card-body::-webkit-scrollbar-thumb {{
+    background: rgba(120,140,180,.30);
+    border-radius: 999px;
+}}
+.svd-card-body::-webkit-scrollbar-track {{ background: transparent; }}
+
+/* Footer text alignment polish */
+.svd-footer {{
+    color: {SLATE_500};
+    font-size: 12px;
+    line-height: 1.55;
+    text-align: center;
+    margin: 18px 0 6px;
+}}
+.svd-footer a {{ color: {CYAN}; text-decoration: none; }}
+"""
+
+
+# ═════════════════════════ UI ═════════════════════════
+
+
+def _build_interface() -> gr.Blocks:
+    finals = list_final_specs()  # noqa: F841 (used implicitly via DEFAULT_GROUP)
+    default_display = MODEL_SPECS[DEFAULT_MODEL].display_name
+
+    examples_dir = Path(__file__).parent / "examples"
+    videos_dir = Path(__file__).resolve().parent.parent / "videos"
+    example_videos: List[List[str]] = []
+    seen_videos = set()
+    for cand_dir in (examples_dir, videos_dir):
+        if cand_dir.exists():
+            for video_file in sorted(cand_dir.glob("*.mp4")):
+                if video_file.name not in seen_videos:
+                    seen_videos.add(video_file.name)
+                    example_videos.append([str(video_file), default_display])
+
+    with gr.Blocks(
+        title="Safe School AI — Violence Detection",
+        elem_classes=["svd-app"],
+    ) as demo:
+        # ── HEADER ──
+        gr.HTML(
+            f"""
+            <div style="text-align:center;">
+              <h1 style="margin-bottom:4px;color:{TEXT_HI};">
+                🏫 Safe School AI — Violence Detection
+              </h1>
+              <p style="margin-top:0;color:{SLATE_400};">
+                Real-time school violence detection using 3D CNNs.
+              </p>
+              <div>
+                <span class="svd-tag">⚡ early warning</span>
+                <span class="svd-tag">🎞 temporal inference</span>
+                <span class="svd-tag">🤖 real-time AI</span>
+                <span class="svd-tag">🎓 UIT thesis, 2026</span>
+              </div>
+            </div>
+            """
+        )
+
+        # ───────── PRIMARY: video (52) │ results (48) ─────────
+        with gr.Row(equal_height=True, elem_classes=["svd-main-row"]):
+            # LEFT
+            with gr.Column(elem_classes=["svd-left-col"]):
+                with gr.Tabs():
+                    with gr.Tab("📁 Video Analysis"):
+                        video_input = gr.Video(
+                            label="Upload video",
+                            show_label=False,
+                            sources=["upload"],
+                            include_audio=False,
+                            elem_classes=["svd-video-frame"],
+                            height=360,
+                        )
+
+                        upload_btn = gr.UploadButton(
+                            "Upload Video (4-10s recommended)",
+                            file_types=["video"],
+                            file_count="single",
+                            size="sm",
+                            elem_classes=["svd-upload-btn"],
+                        )
+
+                        with gr.Row(elem_classes=["svd-model-row"]):
+                            group_dropdown = gr.Dropdown(
+                                choices=GROUP_CHOICES,
+                                value=DEFAULT_GROUP,
+                                show_label=False,
+                                container=False,
+                                elem_classes=["svd-group-dropdown"],
+                            )
+                            model_dropdown = gr.Dropdown(
+                                choices=_choices_for_group(DEFAULT_GROUP),
+                                value=default_display,
+                                show_label=False,
+                                container=False,
+                                elem_classes=["svd-model-dropdown"],
+                            )
+
+                        analyze_btn = gr.Button(
+                            "⚡ Analyze Video",
+                            variant="primary",
+                            elem_classes=["svd-analyze-btn"],
+                        )
+
+                        progress_html = gr.HTML(value="", visible=False)
+
+                    with gr.Tab("📹 Live Camera"):
+                        live_url = gr.Textbox(
+                            label="Camera Source (Webcam index '0' or Stream URL)",
+                            placeholder="0 for webcam or http://PHONE_IP:8080/video",
+                            value="0",
+                        )
+
+                        live_preview = gr.Image(
+                            label="Live Camera Feed",
+                            type="numpy",
+                            height=300,
+                        )
+
+                        with gr.Row():
+                            live_risk = gr.Textbox(
+                                label="Risk",
+                                interactive=False,
+                                scale=1,
+                            )
+                            live_confidence = gr.Number(
+                                label="Probability",
+                                precision=3,
+                                interactive=False,
+                                scale=1,
+                            )
+                            live_status = gr.Textbox(
+                                label="Status",
+                                value="Not started",
+                                interactive=False,
+                                scale=1,
+                            )
+
+                        with gr.Row():
+                            live_start = gr.Button(
+                                "Start Monitoring",
+                                variant="primary",
+                            )
+                            live_stop = gr.Button(
+                                "Stop Monitoring",
+                                variant="stop",
+                            )
+
+                # Filler to absorb any vertical slack so left col matches right.
+                gr.HTML('<div class="svd-left-spacer"></div>')
+
+            # RIGHT
+            with gr.Column(elem_classes=["svd-right-col"]):
+                # Top row — Risk + Confidence (equal width, equal height)
+                with gr.Row(elem_classes=["svd-top-row"]):
+                    risk_card = gr.HTML(
+                        value=_risk_card_placeholder(),
+                        elem_classes=["svd-panel-host"],
+                    )
+                    confidence_html = gr.HTML(
+                        value=_render_confidence_panel(None),
+                        elem_classes=["svd-panel-host"],
+                    )
+
+                # Timeline panel — our own card shell wraps the gr.Plot.
+                with gr.Column(elem_classes=["svd-timeline-wrap"]):
+                    gr.HTML('<div class="svd-card-title">Timeline confidence</div>')
+                    with gr.Column(elem_classes=["svd-timeline-body"]):
+                        timeline_plot = gr.Plot(
+                            value=_placeholder_timeline_plot(),
+                            show_label=False,
+                        )
+                        timeline_overlay = gr.HTML(
+                            value=_timeline_overlay_hidden(),
+                            elem_classes=["svd-timeline-overlay-host"],
+                        )
+
+        # ───────── COLLAPSIBLES ─────────
+        with gr.Accordion("Explain decision", open=False, elem_classes=["svd-accordion"]):
+            explain_md = gr.Markdown(
+                value=(
+                    "_The decision rule is shown here once you run an analysis. "
+                    "It documents threshold τ, consecutive-window requirement and "
+                    "the aggregation policy applied to per-window probabilities._"
+                )
+            )
+        with gr.Accordion("Advanced technical metrics", open=False, elem_classes=["svd-accordion"]):
+            tech_md = gr.Markdown(value="")
+
+        if example_videos:
+            gr.Examples(
+                examples=example_videos,
+                inputs=[video_input, model_dropdown],
+                label="📂 Examples",
+            )
+
+        gr.HTML(
+            f"""
+            <div class="svd-footer">
+              <hr style="border:none;border-top:1px solid {PANEL_BORDER};margin:0 0 10px;">
+              Models fine-tuned from Kinetics-400 pretrain on <b>RWF-2000</b> ·
+              Checkpoints:
+              <a href="https://huggingface.co/visionlab-ai/school-violence-detection-models">
+                visionlab-ai/school-violence-detection-models</a>
+              · UIT thesis, 2026.<br/>
+              <b>Not</b> intended for legal/disciplinary decisions; sports motion
+              may produce false alarms.
+            </div>
+            """
+        )
+
+        # ── WIRING ──
+        group_dropdown.change(
+            fn=_on_group_change,
+            inputs=[group_dropdown, model_dropdown],
+            outputs=model_dropdown,
+        )
+
+        # The Upload Video button just forwards the selected file's path
+        # into the video player above. gr.UploadButton.upload fires with
+        # the file payload server-side, so no extra round-trip.
+        upload_btn.upload(
+            fn=lambda f: ensure_browser_playable(f) if f is not None else None,
+            inputs=upload_btn,
+            outputs=video_input,
+            show_progress="hidden",
+        )
+
+        # When the user drags-and-drops a file directly into the video frame
+        # (instead of clicking the upload button), Gradio writes the file to a
+        # temp path and fires .upload. AVI / MKV files get transcoded to MP4
+        # so the browser preview can play them; analysis runs on the same path.
+        video_input.upload(
+            fn=ensure_browser_playable,
+            inputs=video_input,
+            outputs=video_input,
+            show_progress="hidden",
+        )
+
+        analyze_btn.click(
+            fn=predict,
+            inputs=[video_input, model_dropdown],
+            outputs=[
+                progress_html,
+                risk_card,
+                confidence_html,
+                timeline_plot,
+                timeline_overlay,
+                explain_md,
+                tech_md,
+            ],
+            show_progress="hidden",
+        )
+
+        # LIVE CAMERA EVENT WIRING
+        live_event = live_start.click(
+            fn=predict_live,
+            inputs=[live_url, model_dropdown],
+            outputs=[
+                live_preview,
+                live_risk,
+                live_confidence,
+                live_status,
+            ],
+            show_progress="hidden",
+        )
+
+        live_stop.click(
+            fn=lambda: "Stopped",
+            inputs=None,
+            outputs=live_status,
+            cancels=[live_event],
+            show_progress="hidden",
+        )
+
+    return demo
+
+
+demo = _build_interface()
+
+
+if __name__ == "__main__":
+    import socket
+    import argparse
+    import traceback
+
+    parser = argparse.ArgumentParser(description="Sentinel AI - Fight Engine Live Server")
+    parser.add_argument("--share", action="store_true", help="Create public live link on gradio.live")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=0, help="Port to bind (default: auto)")
+    parser.add_argument("--inbrowser", action="store_true", help="Automatically open in browser")
+    cli_args, _ = parser.parse_known_args()
+
+    def _find_free_port(start_port: int = 7860, max_tries: int = 30) -> int:
+        for port in range(start_port, start_port + max_tries):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(("127.0.0.1", port)) != 0:
+                    return port
+        return start_port
+
+    target_port = cli_args.port or int(os.environ.get("GRADIO_SERVER_PORT", "0"))
+    if target_port == 0:
+        target_port = _find_free_port(7860)
+
+    should_share = cli_args.share or os.environ.get("GRADIO_SHARE", "").lower() in ("true", "1", "yes")
+
+    print(f"\n[Sentinel AI] Starting Live Gradio server on {cli_args.host}:{target_port} (share={should_share})...", flush=True)
+    try:
+        demo.queue().launch(
+            server_name=cli_args.host,
+            server_port=target_port,
+            share=should_share,
+            inbrowser=cli_args.inbrowser,
+            theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="blue", neutral_hue="slate"),
+            css=_GLOBAL_CSS,
+            show_error=True,
+            quiet=False,
+        )
+    except Exception:
+        print("\n[Sentinel AI] Gradio server failed to start:", flush=True)
+        traceback.print_exc()
+        raise

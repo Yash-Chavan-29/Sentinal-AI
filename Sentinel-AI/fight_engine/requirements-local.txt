@@ -1,0 +1,48 @@
+# Local development requirements (macOS / Apple Silicon)
+# ─────────────────────────────────────────────────────────────────
+# `requirements.txt` is the source of truth for Hugging Face Space
+# build (linux + Python 3.12). This file mirrors it but drops a few
+# linux-only packages so the app can be iterated on Mac:
+#
+#   • decord  → no macOS arm64 wheel; the app uses OpenCV instead.
+#                Mock-test of Space UI works fine without it.
+#
+# If you want to test full inference locally too, you still need:
+#   • torch + torchvision (CPU wheels work on Apple Silicon)
+#   • pytorchvideo + fvcore + iopath  (X3D / I3D / SlowFast models)
+#
+# Usage:
+#   python3.11 -m venv .venv-space
+#   source .venv-space/bin/activate
+#   pip install --upgrade pip
+#   pip install -r requirements-local.txt
+#   python app.py              # one-shot
+#   # OR:
+#   gradio app.py              # hot reload while editing
+
+# Deep learning (use whichever Python version your system supports)
+torch>=2.5.0
+torchvision>=0.20.0
+
+# PyTorchVideo models (X3D, I3D, SlowFast). pytorchvideo==0.1.5 was
+# released in 2022; if pip refuses to install on Python 3.12+ try
+# `pip install git+https://github.com/facebookresearch/pytorchvideo.git`
+pytorchvideo>=0.1.5
+fvcore
+iopath
+
+# Video processing (no `decord` — pure OpenCV is enough for the Space app)
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+
+# Hugging Face Hub (fetch checkpoints from the model repo)
+huggingface_hub>=0.24.0,<1.0
+
+# Web interface
+gradio==5.50.0
+matplotlib>=3.7.0
+
+# Utilities
+numpy>=1.24.0,<2.0
+pyyaml>=6.0
+tqdm>=4.65.0

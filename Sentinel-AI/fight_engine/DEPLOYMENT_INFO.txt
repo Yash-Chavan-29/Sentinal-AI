@@ -1,0 +1,94 @@
+🚀 School Violence Detection — Hugging Face Space deployment notes
+
+📅 Created: 2026-05-18
+🎯 Target: Hugging Face Space (Gradio SDK)
+🐍 Python: 3.11
+🖥️ Framework: Gradio 4.44.1
+🔗 Model repo: visionlab-ai/school-violence-detection-models
+
+────────────────────────────────────────────────────────────────────────
+📋 Files in this Space repo
+────────────────────────────────────────────────────────────────────────
+- README.md           Space card with YAML frontmatter (title/sdk/etc.)
+- app.py              Gradio entry point
+- model_loader.py     Fetch checkpoint from HF Hub + lazy LRU cache
+- video_utils.py      Frame sampling, resize, normalize, slowfast packing
+- sv_model/           Copied wrappers (X3D, I3D, SlowFast, R(2+1)D)
+- requirements.txt    Dependencies (torch CPU, pytorchvideo, gradio, …)
+- runtime.txt         Python 3.11 pin
+- .gitattributes      Git LFS config for .pt/.mp4/etc.
+- .gitignore          Local venv, gradio cache, downloaded checkpoints
+- examples/           (optional) sample videos for the demo
+
+────────────────────────────────────────────────────────────────────────
+🤖 Model wiring
+────────────────────────────────────────────────────────────────────────
+Checkpoints are NOT in this repo — they live in the model repo and are
+downloaded on first use via `huggingface_hub.hf_hub_download`:
+
+    repo_id   = "visionlab-ai/school-violence-detection-models"
+
+    # ⭐ Final (post-ablation) — default
+    "final_x3d_realtime" : "final/final_x3d_realtime.pt"   # 16 fr, thr=0.4
+    "final_best"         : "final/final_best.pt"           # 32 fr, thr=0.5
+
+    # Baselines (for comparison)
+    "x3d_m"              : "x3d_m/x3d_m_best.pt"
+    "i3d_r50"            : "i3d_r50/i3d_r50_best.pt"
+    "slowfast_r50"       : "slowfast_r50/slowfast_best.pt"
+    "r2plus1d_r18"       : "r2plus1d_18/r2plus1d_best.pt"
+
+Each spec carries its own `num_frames` and `threshold` — the app applies
+them automatically. Notably `final_x3d_realtime` samples 16 frames and
+decides "Violent" when p(violent) >= 0.4 (recalibrated post-ablation).
+
+Override repo with env var:  VIOLENCE_MODEL_REPO_ID=<user>/<repo>
+
+────────────────────────────────────────────────────────────────────────
+🚀 Deploy steps
+────────────────────────────────────────────────────────────────────────
+
+1. Create Space (UI or CLI):
+       huggingface-cli login
+       # Then on https://huggingface.co/new-space:
+       #   Owner       : visionlab-ai
+       #   Space name  : school-violence-detection-app
+       #   SDK         : Gradio
+       #   Hardware    : CPU basic (free) — works with X3D-M
+       #   License     : MIT
+
+2. Push code:
+       cd hugging_face/school-violence-detection-app
+       git init
+       git remote add origin https://huggingface.co/spaces/visionlab-ai/school-violence-detection-app
+       git lfs install
+       git add .
+       git commit -m "Initial Space deployment"
+       git push -u origin main
+
+3. The Space will:
+   - Install requirements.txt  (~3-4 minutes)
+   - Run app.py
+   - On first inference, download the requested checkpoint from the model repo
+     (cached in HF Spaces persistent storage)
+
+────────────────────────────────────────────────────────────────────────
+🐛 Troubleshooting
+────────────────────────────────────────────────────────────────────────
+- If Space build fails on torch install: pin a CPU wheel
+  (e.g. add `--extra-index-url https://download.pytorch.org/whl/cpu`).
+- If SlowFast/I3D crash with OOM: free CPU tier has 16GB RAM —
+  keep `max_cached=1` in `ViolenceModelLoader` (already configured).
+- If a checkpoint state_dict has unexpected keys, `model_loader.py`
+  loads with `strict=False` and logs the mismatch.
+- pytorchvideo torch hub fetch can fail offline; the wrappers already
+  use `pretrained=False` when called from the loader.
+
+────────────────────────────────────────────────────────────────────────
+📊 Expected behavior
+────────────────────────────────────────────────────────────────────────
+- First load of final_x3d_realtime (default): ~10-15s (12 MB checkpoint)
+- Subsequent X3D-M inference: ~200-400ms on CPU (16 frames is fast)
+- Switching to final_best (R(2+1)D, 120 MB): ~30s extra download
+- Switching to baselines (SlowFast/I3D, 300-400 MB): ~60-90s extra
+- UI stays responsive thanks to `demo.queue()`

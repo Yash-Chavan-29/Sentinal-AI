@@ -1,0 +1,18 @@
+# Local artifacts
+.venv/
+.venv-space/
+venv/
+.DS_Store
+__pycache__/
+*.pyc
+.gradio/
+hf_cache/
+tmp/
+flagged/
+
+# Downloaded checkpoints (auto-fetched from HF Hub at runtime)
+checkpoints/
+
+# Local examples large media (use git LFS if you want to commit examples)
+examples/*.mp4
+!examples/.gitkeep

@@ -1,0 +1,29 @@
+# School Violence Detection - Hugging Face Space
+# CPU-only, optimized for HF Spaces free tier
+# Python 3.12 runtime (pinned via README frontmatter).
+
+# Deep learning
+torch==2.5.1
+torchvision==0.20.1
+
+# PyTorchVideo models (X3D, I3D, SlowFast)
+pytorchvideo==0.1.5
+fvcore
+iopath
+
+# Video processing
+opencv-python-headless>=4.8.0
+decord>=0.6.0
+pillow>=10.0.0
+
+# Hugging Face Hub (to download checkpoints from model repo)
+huggingface_hub>=0.24.0,<1.0
+
+# Web interface (gradio 5.x — fixes the gradio_client schema bug present in 4.44.1)
+gradio==5.50.0
+matplotlib>=3.7.0
+
+# Utilities
+numpy>=1.24.0,<2.0
+pyyaml>=6.0
+tqdm>=4.65.0

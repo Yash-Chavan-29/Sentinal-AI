@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENTINEL-AI // Tactical Live Surveillance</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #090c10;
+        }
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .glass-panel {
+            background: rgba(18, 22, 30, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .alarm-border {
+            animation: pulse-border 1s infinite alternate;
+        }
+        @keyframes pulse-border {
+            from { border-color: rgba(239, 68, 68, 0.3); box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+            to { border-color: rgba(239, 68, 68, 1); box-shadow: 0 0 35px rgba(239, 68, 68, 0.8); }
+        }
+        .scanlines {
+            position: relative;
+        }
+        .scanlines::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            z-index: 2;
+            background-size: 100% 3px, 6px 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen flex flex-col antialiased selection:bg-red-500 selection:text-white">
+
+    <!-- Top Tactical Navigation Bar -->
+    <header class="glass-panel border-b border-gray-800/80 px-6 py-3.5 sticky top-0 z-50 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+            <div class="w-3.5 h-3.5 rounded-full bg-emerald-500 animate-pulse" id="headerStatusDot"></div>
+            <div>
+                <div class="flex items-center space-x-2">
+                    <span class="font-bold tracking-wider text-white text-lg mono">SENTINEL-AI</span>
+                    <span class="text-xs bg-red-950/80 text-red-400 border border-red-800/60 px-2 py-0.5 rounded font-semibold tracking-widest uppercase">LIVE SECURITY</span>
+                </div>
+                <p class="text-xs text-gray-400 mono">AUTONOMOUS ALTERCATION & THREAT INTELLIGENCE SYSTEM</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-6">
+            <!-- Telemetry pill -->
+            <div class="hidden md:flex items-center space-x-4 text-xs mono text-gray-300 bg-gray-900/90 px-4 py-2 rounded-lg border border-gray-800">
+                <div>FPS: <span id="headerFps" class="text-emerald-400 font-bold">0</span></div>
+                <div class="w-px h-3 bg-gray-700"></div>
+                <div>LATENCY: <span id="headerLatency" class="text-cyan-400 font-bold">0ms</span></div>
+                <div class="w-px h-3 bg-gray-700"></div>
+                <div>PEOPLE: <span id="headerPeople" class="text-amber-400 font-bold">0</span></div>
+            </div>
+
+            <!-- Siren Toggle -->
+            <button id="sirenBtn" onclick="toggleAudio()" class="flex items-center space-x-2 bg-gray-800/80 hover:bg-gray-750 text-gray-300 px-3.5 py-1.5 rounded-lg border border-gray-700 text-xs font-semibold mono transition">
+                <span id="sirenIcon">🔊</span>
+                <span id="sirenText">ALARM AUDIO: ARMED</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace Grid -->
+    <main class="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl w-full mx-auto">
+
+        <!-- Left Column: Video Feed & Source Control (8 cols) -->
+        <section class="lg:col-span-8 flex flex-col space-y-4">
+            
+            <!-- Video Container -->
+            <div id="videoContainer" class="glass-panel rounded-xl overflow-hidden relative scanlines border border-gray-800 transition-all duration-300">
+                <!-- CCTV Watermark Overlay -->
+                <div class="absolute top-4 left-4 z-10 flex items-center space-x-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded border border-gray-700/50 text-xs mono">
+                    <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+                    <span class="text-red-400 font-bold">REC // CAM-01</span>
+                    <span class="text-gray-400" id="cctvClock">--:--:--</span>
+                </div>
+
+                <!-- Live Stream Image Tag -->
+                <img id="liveStream" src="/video_feed" alt="Sentinel-AI Live Camera Feed" class="w-full h-auto aspect-video object-contain bg-black">
+
+                <!-- Alert Overlay Banner (hidden by default) -->
+                <div id="alarmBanner" class="hidden absolute bottom-4 inset-x-4 z-10 bg-red-600/90 backdrop-blur-md border border-red-400 text-white px-4 py-3 rounded-lg flex items-center justify-between shadow-2xl animate-bounce">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-2xl">🚨</span>
+                        <div>
+                            <div class="font-bold text-sm tracking-wider uppercase">VIOLENT ALTERCATION DETECTED</div>
+                            <div class="text-xs text-red-100">Spatial proximity and high temporal kinetic violence confirmed.</div>
+                        </div>
+                    </div>
+                    <span class="px-2.5 py-1 bg-black/40 rounded text-xs mono font-bold text-white">EVIDENCE LOGGED</span>
+                </div>
+            </div>
+
+            <!-- Camera Source Selector Card -->
+            <div class="glass-panel rounded-xl p-5 border border-gray-800">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-semibold tracking-wider text-gray-200 uppercase mono flex items-center space-x-2">
+                        <span>📹</span>
+                        <span>Camera Feed Source</span>
+                    </h2>
+                    <span id="activeSourceBadge" class="text-xs mono px-2.5 py-1 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 font-semibold">Active: Device 0</span>
+                </div>
+
+                <!-- Quick Presets -->
+                <div class="grid grid-cols-4 gap-2 mb-4">
+                    <button onclick="setCameraSource(0)" class="preset-btn px-2.5 py-2 bg-gray-800/80 hover:bg-gray-700 rounded-lg text-xs mono border border-gray-700/80 transition flex flex-col items-center">
+                        <span class="font-semibold text-white">Webcam 0</span>
+                        <span class="text-gray-400 text-[10px]">Primary</span>
+                    </button>
+                    <button onclick="setCameraSource(1)" class="preset-btn px-2.5 py-2 bg-gray-800/80 hover:bg-gray-700 rounded-lg text-xs mono border border-gray-700/80 transition flex flex-col items-center">
+                        <span class="font-semibold text-white">Webcam 1</span>
+                        <span class="text-gray-400 text-[10px]">Secondary</span>
+                    </button>
+                    <button onclick="fillPreset('http://192.168.1.100:8080/video')" class="preset-btn px-2.5 py-2 bg-gray-800/80 hover:bg-gray-700 rounded-lg text-xs mono border border-gray-700/80 transition flex flex-col items-center">
+                        <span class="font-semibold text-white">Mobile IP</span>
+                        <span class="text-gray-400 text-[10px]">DroidCam</span>
+                    </button>
+                    <button onclick="setCameraSource('sample')" class="preset-btn px-2.5 py-2 bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/80 rounded-lg text-xs mono transition flex flex-col items-center">
+                        <span class="font-semibold text-indigo-300">Live CCTV Sim</span>
+                        <span class="text-indigo-400 text-[10px]">Sample Feed</span>
+                    </button>
+                </div>
+
+                <!-- Custom URL / RTSP Input -->
+                <div class="flex items-center space-x-2">
+                    <input id="cameraInput" type="text" placeholder="Enter Camera Index (0, 1) or IP Stream (e.g. http://192.168.1.100:8080/video)"
+                           class="flex-1 bg-gray-900 border border-gray-700 text-xs text-gray-200 px-3.5 py-2.5 rounded-lg mono focus:outline-none focus:border-emerald-500">
+                    <button onclick="applyCustomCamera()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs mono font-bold transition flex items-center space-x-1.5 shadow-lg shadow-emerald-950">
+                        <span>CONNECT</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Column: Threat Metrics & Incident Vault (4 cols) -->
+        <aside class="lg:col-span-4 flex flex-col space-y-6">
+
+            <!-- Real-Time Threat Telemetry HUD -->
+            <div class="glass-panel rounded-xl p-5 border border-gray-800">
+                <h2 class="text-sm font-semibold tracking-wider text-gray-200 uppercase mono mb-4 flex items-center space-x-2">
+                    <span>⚡</span>
+                    <span>Threat Telemetry HUD</span>
+                </h2>
+
+                <!-- Threat Probability Meter -->
+                <div class="mb-5">
+                    <div class="flex justify-between items-center mb-1 text-xs mono">
+                        <span class="text-gray-400">ALTERCATION PROBABILITY:</span>
+                        <span id="threatPct" class="font-bold text-emerald-400 text-sm">0.0%</span>
+                    </div>
+                    <div class="w-full bg-gray-800 rounded-full h-3 overflow-hidden p-0.5 border border-gray-700">
+                        <div id="threatBar" class="h-full bg-emerald-500 rounded-full transition-all duration-300" style="width: 0%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-gray-400 mono mt-1">
+                        <span>NORMAL</span>
+                        <span>SUSPICIOUS</span>
+                        <span class="text-red-400">CRITICAL</span>
+                    </div>
+                </div>
+
+                <!-- Key Metrics Grid -->
+                <div class="grid grid-cols-2 gap-3 text-xs mono">
+                    <div class="bg-gray-900/80 p-3 rounded-lg border border-gray-800">
+                        <div class="text-gray-400 text-[10px]">RISK STATUS</div>
+                        <div id="riskStatus" class="font-bold text-emerald-400 text-base mt-0.5">NORMAL</div>
+                    </div>
+                    <div class="bg-gray-900/80 p-3 rounded-lg border border-gray-800">
+                        <div class="text-gray-400 text-[10px]">TRACKED SUBJECTS</div>
+                        <div id="personCount" class="font-bold text-amber-400 text-base mt-0.5">0 Persons</div>
+                    </div>
+                    <div class="bg-gray-900/80 p-3 rounded-lg border border-gray-800">
+                        <div class="text-gray-400 text-[10px]">INFERENCE LATENCY</div>
+                        <div id="latencyVal" class="font-bold text-cyan-400 text-base mt-0.5">0.0 ms</div>
+                    </div>
+                    <div class="bg-gray-900/80 p-3 rounded-lg border border-gray-800">
+                        <div class="text-gray-400 text-[10px]">FRAME THROUGHPUT</div>
+                        <div id="fpsVal" class="font-bold text-gray-200 text-base mt-0.5">0 FPS</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Evidence Snapshot Vault (Feature 8) -->
+            <div class="glass-panel rounded-xl p-5 border border-gray-800 flex-1 flex flex-col">
+                <div class="flex items-center justify-between mb-3">
+                    <h2 class="text-sm font-semibold tracking-wider text-gray-200 uppercase mono flex items-center space-x-2">
+                        <span>🛡️</span>
+                        <span>Evidence Vault</span>
+                    </h2>
+                    <span id="vaultCount" class="text-xs text-gray-400 mono">0 Records</span>
+                </div>
+                
+                <div id="snapshotGallery" class="space-y-3 overflow-y-auto max-h-[380px] pr-1">
+                    <div class="text-xs text-gray-400 text-center py-8 mono">
+                        No critical incident snapshots recorded yet.
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+    </main>
+
+    <!-- Client-side Audio Siren Synthesizer -->
+    <script>
+        let audioEnabled = true;
+        let audioCtx = null;
+        let sirenOscillator = null;
+        let sirenGain = null;
+        let isSirenPlaying = false;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function toggleAudio() {
+            initAudio();
+            audioEnabled = !audioEnabled;
+            const textEl = document.getElementById("sirenText");
+            const iconEl = document.getElementById("sirenIcon");
+            if (audioEnabled) {
+                textEl.innerText = "ALARM AUDIO: ARMED";
+                iconEl.innerText = "🔊";
+            } else {
+                stopSiren();
+                textEl.innerText = "ALARM AUDIO: MUTED";
+                iconEl.innerText = "🔇";
+            }
+        }
+
+        function startSiren() {
+            if (!audioEnabled || isSirenPlaying) return;
+            initAudio();
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            sirenOscillator = audioCtx.createOscillator();
+            sirenGain = audioCtx.createGain();
+
+            sirenOscillator.type = "sawtooth";
+            sirenOscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+
+            // Modulate frequency for emergency siren sweep
+            const now = audioCtx.currentTime;
+            sirenOscillator.frequency.linearRampToValueAtTime(950, now + 0.35);
+            sirenOscillator.frequency.linearRampToValueAtTime(600, now + 0.7);
+
+            sirenGain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+
+            sirenOscillator.connect(sirenGain);
+            sirenGain.connect(audioCtx.destination);
+
+            sirenOscillator.start();
+            isSirenPlaying = true;
+        }
+
+        function stopSiren() {
+            if (sirenOscillator && isSirenPlaying) {
+                try {
+                    sirenOscillator.stop();
+                    sirenOscillator.disconnect();
+                } catch(e) {}
+                isSirenPlaying = false;
+            }
+        }
+
+        // Clock Update
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById("cctvClock").innerText = now.toTimeString().split(' ')[0];
+        }, 1000);
+
+        // Telemetry Polling Loop
+        async function fetchTelemetry() {
+            try {
+                const res = await fetch("/api/telemetry");
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // Update Header
+                document.getElementById("headerFps").innerText = data.fps;
+                document.getElementById("headerLatency").innerText = data.latency_ms + "ms";
+                document.getElementById("headerPeople").innerText = data.person_count;
+
+                // Update HUD
+                document.getElementById("fpsVal").innerText = data.fps + " FPS";
+                document.getElementById("latencyVal").innerText = data.latency_ms + " ms";
+                document.getElementById("personCount").innerText = data.person_count + (data.person_count === 1 ? " Person" : " Persons");
+                document.getElementById("riskStatus").innerText = data.risk_level.toUpperCase();
+
+                const threat = data.threat_score;
+                document.getElementById("threatPct").innerText = threat + "%";
+                const threatBar = document.getElementById("threatBar");
+                threatBar.style.width = Math.min(100, threat) + "%";
+
+                const videoContainer = document.getElementById("videoContainer");
+                const alarmBanner = document.getElementById("alarmBanner");
+                const statusDot = document.getElementById("headerStatusDot");
+
+                if (data.is_alarm) {
+                    // Critical Alert Mode
+                    document.getElementById("riskStatus").className = "font-bold text-red-500 text-base mt-0.5 animate-pulse";
+                    threatBar.className = "h-full bg-red-600 rounded-full transition-all duration-300";
+                    videoContainer.classList.add("alarm-border");
+                    alarmBanner.classList.remove("hidden");
+                    statusDot.className = "w-3.5 h-3.5 rounded-full bg-red-500 animate-ping";
+                    startSiren();
+                } else if (data.risk_level === "Suspicious") {
+                    document.getElementById("riskStatus").className = "font-bold text-amber-400 text-base mt-0.5";
+                    threatBar.className = "h-full bg-amber-500 rounded-full transition-all duration-300";
+                    videoContainer.classList.remove("alarm-border");
+                    alarmBanner.classList.add("hidden");
+                    statusDot.className = "w-3.5 h-3.5 rounded-full bg-amber-500";
+                    stopSiren();
+                } else {
+                    document.getElementById("riskStatus").className = "font-bold text-emerald-400 text-base mt-0.5";
+                    threatBar.className = "h-full bg-emerald-500 rounded-full transition-all duration-300";
+                    videoContainer.classList.remove("alarm-border");
+                    alarmBanner.classList.add("hidden");
+                    statusDot.className = "w-3.5 h-3.5 rounded-full bg-emerald-500 animate-pulse";
+                    stopSiren();
+                }
+
+                document.getElementById("activeSourceBadge").innerText = "Active: " + data.camera_source;
+            } catch (err) {
+                console.error("Telemetry error:", err);
+            }
+        }
+
+        // Snapshot Vault Polling
+        async function fetchSnapshots() {
+            try {
+                const res = await fetch("/api/snapshots");
+                if (!res.ok) return;
+                const snapshots = await res.json();
+                const gallery = document.getElementById("snapshotGallery");
+                document.getElementById("vaultCount").innerText = snapshots.length + " Records";
+
+                if (snapshots.length === 0) {
+                    gallery.innerHTML = `<div class="text-xs text-gray-400 text-center py-8 mono">No incident snapshots recorded yet.</div>`;
+                    return;
+                }
+
+                gallery.innerHTML = snapshots.map(s => `
+                    <div class="bg-gray-900/90 border border-gray-800 rounded-lg p-2.5 flex space-x-3 items-center hover:border-gray-700 transition">
+                        <img src="/snapshots/${s.filename}" class="w-16 h-12 object-cover rounded border border-gray-700">
+                        <div class="flex-1 mono text-xs">
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-red-400">${s.severity}</span>
+                                <span class="text-gray-400 text-[10px]">${s.timestamp}</span>
+                            </div>
+                            <div class="text-[11px] text-gray-300 mt-0.5">Threat: <span class="text-white font-bold">${s.score}%</span> | People: ${s.people_involved}</div>
+                            <a href="/snapshots/${s.filename}" target="_blank" class="text-[10px] text-cyan-400 hover:underline mt-1 inline-block">View Full Snapshot &rarr;</a>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                console.error("Snapshot fetch error:", err);
+            }
+        }
+
+        function fillPreset(val) {
+            document.getElementById("cameraInput").value = val;
+        }
+
+        async function setCameraSource(src) {
+            try {
+                const res = await fetch("/api/camera", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({source: src})
+                });
+                const resData = await res.json();
+                if (resData.success) {
+                    document.getElementById("activeSourceBadge").innerText = "Active: " + src;
+                    // Reset live stream img to force reconnect
+                    const img = document.getElementById("liveStream");
+                    img.src = "/video_feed?t=" + new Date().getTime();
+                }
+            } catch (err) {
+                alert("Failed to switch camera: " + err);
+            }
+        }
+
+        function applyCustomCamera() {
+            const val = document.getElementById("cameraInput").value.trim();
+            if (val.length > 0) {
+                setCameraSource(val);
+            }
+        }
+
+        // Run loops
+        setInterval(fetchTelemetry, 350);
+        setInterval(fetchSnapshots, 3000);
+        fetchSnapshots();
+    </script>
+</body>
+</html>
